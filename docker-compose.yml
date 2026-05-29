@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  tts-backend:
+    build: ./backend
+    container_name: tts-backend
+    restart: always
+    environment:
+      - PROJECT_NAME=tts
+      - DB_HOST=${DB_HOST:-127.0.0.1}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-Gmcc@123}
+      - DB_NAME=${DB_NAME:-tts_db}
+    ports:
+      - "${APP_PORT:-8009}:8009"
+    volumes:
+      - ./backend/data:/app/data
+    # depends_on:
+    #   - mysql_db
+
+  # tts-frontend:
+  #   build: ./frontend
+  #   container_name: tts-frontend
+  #   restart: always
+  #   ports:
+  #     - "80:80"
+  #   depends_on:
+  #     - tts-backend
+
+  # mysql_db:
+  #   image: mysql:8.0
+  #   container_name: tts-mysql
+  #   restart: always
+  #   environment:
+  #     - MYSQL_ROOT_PASSWORD=${DB_PASSWORD:-my@secure#password}
+  #     - MYSQL_DATABASE=tts_db
+  #   volumes:
+  #     - db_data:/var/lib/mysql
+
+volumes:
+  db_data:

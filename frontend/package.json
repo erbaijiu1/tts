@@ -1,0 +1,21 @@
+{
+  "name": "tts-frontend",
+  "version": "1.0.0",
+  "scripts": {
+    "dev:h5": "uni",
+    "build:h5": "uni build"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-3080220230511001",
+    "@dcloudio/uni-components": "3.0.0-alpha-3080220230511001",
+    "@dcloudio/uni-h5": "3.0.0-alpha-3080220230511001",
+    "vue": "^3.2.47",
+    "vue-i18n": "^9.2.2"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.3.2",
+    "@dcloudio/uni-cli-shared": "3.0.0-alpha-3080220230511001",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-3080220230511001",
+    "vite": "^4.2.1"
+  }
+}
