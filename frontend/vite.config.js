@@ -1,11 +1,11 @@
 import { defineConfig } from 'vite';
-import uni from '@dcloudio/vite-plugin-uni';
+import vue from '@vitejs/plugin-vue';
 
 const PROJECT_NAME = process.env.PROJECT_NAME || 'tts';
 const APP_PORT = process.env.APP_PORT || '8009';
 
 export default defineConfig({
-  plugins: [uni()],
+  plugins: [vue()],
   // 必须配置 base 使得打包后的静态资源路径正确匹配 /{project_name}/html/
   base: `/${PROJECT_NAME}/html/`,
   server: {

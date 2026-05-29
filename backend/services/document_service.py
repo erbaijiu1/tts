@@ -93,6 +93,58 @@ def extract_text_from_pdf(pdf_path: str) -> str:
                 raw_text += page_text + "\n"
     return raw_text
 
+def extract_text_with_llm(pdf_path: str) -> str:
+    import fitz
+    import base64
+    import os
+    from openai import OpenAI
+    
+    API_KEY = os.environ.get("LLM_API_KEY", "")
+    BASE_URL = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "hunyuan-vision")
+    HUNYUAN_API_KEY = os.environ.get("HUNYUAN_API_KEY", "")
+    
+    if MODEL_NAME.startswith("hunyuan"):
+        client = OpenAI(
+            api_key=HUNYUAN_API_KEY,
+            base_url="https://api.hunyuan.cloud.tencent.com/v1"
+        )
+    else:
+        client = OpenAI(
+            api_key=API_KEY,
+            base_url=BASE_URL if BASE_URL else None
+        )
+    
+    doc = fitz.open(pdf_path)
+    content = [{"type": "text", "text": "你是一个专业的 OCR 和文本排版助手。请提取图片中的全部正文内容，自动忽略并去除所有斜向水印、背景文字以及页眉页脚。如果遇到被换行截断的句子，请拼接完整。只需返回纯文本，无需解释。"}]
+    
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        mat = fitz.Matrix(4.0, 4.0)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img_bytes = pix.tobytes("jpeg")
+        base64_img = base64.b64encode(img_bytes).decode('utf-8')
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_img}"
+            }
+        })
+        
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": content}],
+            temperature=0.01
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        import traceback
+        with open("/app/data/llm_error.log", "w") as f:
+            f.write(traceback.format_exc())
+        raise e
+
+
 def inject_pauses(cleaned_text: str, sentence_pause_ms: int = 800, paragraph_pause_ms: int = 1500) -> str:
     # Normalize consecutive newlines
     text = re.sub(r'\n{3,}', '\n\n', cleaned_text)

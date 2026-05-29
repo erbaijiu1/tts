@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from database import engine, Base, get_db
 from models import AudioTask
-from services.document_service import extract_text_from_pdf, clean_and_format_text, inject_pauses
+from services.document_service import extract_text_from_pdf, clean_and_format_text, inject_pauses, extract_text_with_llm
 from services.tts_service import synthesize_text_to_audio
 
 PROJECT_NAME = os.getenv("PROJECT_NAME", "tts")
@@ -66,7 +66,10 @@ async def health_check():
     return {"status": "ok", "project": PROJECT_NAME}
 
 @router.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(
+    file: UploadFile = File(...),
+    mode: str = Form("standard")
+):
     """
     Endpoint to receive a PDF file, extract text, clean layout, and return it.
     """
@@ -82,8 +85,18 @@ async def upload_pdf(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
             
         # Parse PDF text
-        raw_text = extract_text_from_pdf(temp_path)
-        cleaned_text = clean_and_format_text(raw_text)
+        try:
+            if mode == "llm":
+                cleaned_text = extract_text_with_llm(temp_path)
+                raw_text = cleaned_text
+            else:
+                raw_text = extract_text_from_pdf(temp_path)
+                cleaned_text = clean_and_format_text(raw_text)
+        except Exception as e:
+            import traceback
+            with open("/app/data/llm_error.log", "w") as f:
+                f.write(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=str(e))
         
         return {
             "filename": file.filename,
