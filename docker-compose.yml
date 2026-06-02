@@ -5,6 +5,8 @@ services:
     build: ./backend
     container_name: tts-backend
     restart: always
+    env_file:
+      - .env
     environment:
       - PROJECT_NAME=tts
       - DB_HOST=${DB_HOST:-127.0.0.1}
@@ -15,7 +17,7 @@ services:
     ports:
       - "${APP_PORT:-8009}:8009"
     volumes:
-      - ./backend/data:/app/data
+      - ./backend:/app
     # depends_on:
     #   - mysql_db
 

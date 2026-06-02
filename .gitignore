@@ -26,3 +26,5 @@ Thumbs.db
 backend/data/output_audio/*.mp3
 backend/data/output_audio/*.pdf
 backend/data/uploads/
+backend/data/
+backend/.idea/

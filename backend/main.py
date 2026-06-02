@@ -13,6 +13,7 @@ from database import engine, Base, get_db
 from models import AudioTask
 from services.document_service import extract_text_from_pdf, clean_and_format_text, inject_pauses, extract_text_with_llm
 from services.tts_service import synthesize_text_to_audio
+from logger import logger
 
 PROJECT_NAME = os.getenv("PROJECT_NAME", "tts")
 
@@ -57,18 +58,27 @@ class SynthesizeRequest(BaseModel):
     rate: Optional[str] = "+0%"
     sentence_pause_ms: Optional[int] = 800
     paragraph_pause_ms: Optional[int] = 1500
+    req_id: Optional[str] = None
+
+# Global store for synthesis progress
+progress_store = {}
 
 # Create prefix router
 router = APIRouter(prefix=f"/{PROJECT_NAME}/api")
+
+@router.get("/progress/{req_id}")
+async def get_progress(req_id: str):
+    return {"progress": progress_store.get(req_id, 0)}
 
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "project": PROJECT_NAME}
 
 @router.post("/upload")
-async def upload_pdf(
+def upload_pdf(
     file: UploadFile = File(...),
-    mode: str = Form("standard")
+    mode: str = Form("standard"),
+    req_id: Optional[str] = Form(None)
 ):
     """
     Endpoint to receive a PDF file, extract text, clean layout, and return it.
@@ -79,6 +89,13 @@ async def upload_pdf(
     temp_filename = f"{uuid.uuid4()}_{file.filename}"
     temp_path = os.path.join(UPLOAD_DIR, temp_filename)
     
+    if req_id:
+        progress_store[req_id] = 0
+        
+    def update_progress(pct: float):
+        if req_id:
+            progress_store[req_id] = int(pct)
+    
     try:
         # Save file locally
         with open(temp_path, "wb") as buffer:
@@ -87,15 +104,13 @@ async def upload_pdf(
         # Parse PDF text
         try:
             if mode == "llm":
-                cleaned_text = extract_text_with_llm(temp_path)
+                cleaned_text = extract_text_with_llm(temp_path, progress_callback=update_progress)
                 raw_text = cleaned_text
             else:
                 raw_text = extract_text_from_pdf(temp_path)
                 cleaned_text = clean_and_format_text(raw_text)
         except Exception as e:
-            import traceback
-            with open("/app/data/llm_error.log", "w") as f:
-                f.write(traceback.format_exc())
+            logger.error(f"Failed to extract text from PDF: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
         
         return {
@@ -110,6 +125,8 @@ async def upload_pdf(
         # Clean up temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        if req_id and req_id in progress_store:
+            del progress_store[req_id]
 
 @router.post("/synthesize")
 async def synthesize_text(
@@ -124,6 +141,13 @@ async def synthesize_text(
         raise HTTPException(status_code=400, detail="Text content cannot be empty.")
         
     try:
+        if payload.req_id:
+            progress_store[payload.req_id] = 0
+            
+        async def update_progress(pct: float):
+            if payload.req_id:
+                progress_store[payload.req_id] = int(pct)
+
         # Inject SSML breaks
         ssml_text = inject_pauses(
             payload.text,
@@ -133,10 +157,11 @@ async def synthesize_text(
         
         # Async synthesize voice
         mp3_filename = await synthesize_text_to_audio(
-            ssml_text=ssml_text,
+            text=ssml_text,
             voice=payload.voice,
             rate=payload.rate,
-            output_dir=OUTPUT_AUDIO_DIR
+            output_dir=OUTPUT_AUDIO_DIR,
+            progress_callback=update_progress
         )
         
         # Resolve request host for absolute URL
@@ -164,7 +189,11 @@ async def synthesize_text(
             "created_at": new_task.created_at
         }
     except Exception as e:
+        logger.error(f"TTS synthesis failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+    finally:
+        if payload.req_id and payload.req_id in progress_store:
+            del progress_store[payload.req_id]
 
 @router.get("/tasks")
 async def get_tasks_history(
@@ -193,5 +222,40 @@ async def get_tasks_history(
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch tasks history: {str(e)}")
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Deletes a voice synthesis task and its corresponding MP3 file.
+    """
+    try:
+        query = select(AudioTask).where(AudioTask.id == task_id)
+        result = await db.execute(query)
+        task = result.scalars().first()
+        
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+            
+        # Delete local file if it exists
+        if task.audio_url:
+            # extract filename from the URL assuming /tts/static/filename.mp3
+            filename = task.audio_url.split("/")[-1]
+            file_path = os.path.join(OUTPUT_AUDIO_DIR, filename)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Deleted local audio file: {file_path}")
+                
+        # Delete DB record
+        await db.delete(task)
+        await db.commit()
+        return {"status": "success", "message": "Task deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete task {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete task: {str(e)}")
 
 app.include_router(router)

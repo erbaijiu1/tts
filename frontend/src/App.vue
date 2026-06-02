@@ -100,9 +100,12 @@
                 </div>
 
                 <div class="dropzone-inner" v-else-if="uploading">
-                  <div class="spinner"></div>
-                  <p class="main-msg">正在提取与清洗 PDF 文本...</p>
-                  <p class="sub-msg">提取段落与段落去重中</p>
+                  <div class="upload-progress-ring">
+                    <div class="spinner" :style="isLLMMode ? 'width: 48px; height: 48px; border-width: 4px;' : ''"></div>
+                    <div v-if="isLLMMode && uploadProgress > 0" class="ring-text">{{ uploadProgress }}%</div>
+                  </div>
+                  <p class="main-msg">{{ isLLMMode ? `正在逐页进行大模型深度清洗...` : '正在提取 PDF 文本...' }}</p>
+                  <p class="sub-msg">{{ isLLMMode ? '此过程可能需要几分钟，请耐心等待' : '提取段落与段落去重中' }}</p>
                 </div>
 
                 <div class="dropzone-inner" v-else>
@@ -207,13 +210,16 @@
             </button>
             
             <button 
-              class="primary-btn glow-on-hover"
+              class="primary-btn glow-on-hover progress-button"
               :class="{ pulse: synthesizing }"
               @click="startSynthesis"
               :disabled="synthesizing || getActiveText().length === 0"
             >
-              <span v-if="synthesizing" class="btn-loader"></span>
-              {{ synthesizing ? '正在异步生成 MP3...' : '开始生成语音' }}
+              <div v-if="synthesizing" class="btn-progress-bar" :style="{ width: synthesisProgress + '%' }"></div>
+              <span class="btn-content">
+                <span v-if="synthesizing" class="btn-loader"></span>
+                {{ synthesizing ? (synthesisProgress > 0 ? `正在合成中... ${synthesisProgress}%` : '建立连接与分块中...') : '开始生成语音' }}
+              </span>
             </button>
           </div>
         </div>
@@ -350,6 +356,16 @@
                   <span>{{ formatDate(task.created_at) }}</span>
                 </div>
               </div>
+              <!-- Delete button -->
+              <button
+                class="delete-task-btn"
+                title="删除此记录"
+                @click.stop="confirmDeleteTask(task)"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
             </div>
           </div>
           <div class="history-empty" v-else>
@@ -374,14 +390,17 @@ export default {
       isLLMMode: false,
       uploadedFile: null,
       uploading: false,
-      
+      uploadProgress: 0,
+
       // Synthesize parameters
       voice: 'zh-CN-XiaoxiaoNeural',
       speedRate: '+0%',
       sentencePause: 800,
       paragraphPause: 1500,
       synthesizing: false,
-      
+      synthesisProgress: 0,
+      progressInterval: null,
+
       // Speed rate presets mapping
       speedPresets: [
         { label: '0.8x 慢速', rate: '-20%' },
@@ -524,11 +543,25 @@ export default {
     async uploadFile(file) {
       this.uploadedFile = file;
       this.uploading = true;
-      
+      this.uploadProgress = 0;
+
+      const reqId = Math.random().toString(36).substring(2, 10);
       const formData = new FormData();
       formData.append('file', file);
       formData.append('mode', this.isLLMMode ? 'llm' : 'standard');
-      
+      formData.append('req_id', reqId);
+
+      const progressInterval = setInterval(async () => {
+        if (!this.isLLMMode) return;
+        try {
+          const res = await fetch(`/tts/api/progress/${reqId}`);
+          if (res.ok) {
+            const data = await res.json();
+            this.uploadProgress = data.progress;
+          }
+        } catch (e) {}
+      }, 1000);
+
       try {
         const response = await fetch('/tts/api/upload', {
           method: 'POST',
@@ -551,6 +584,8 @@ export default {
         this.resetUpload();
       } finally {
         this.uploading = false;
+        clearInterval(progressInterval);
+        this.uploadProgress = 0;
       }
     },
 
@@ -563,7 +598,20 @@ export default {
       }
 
       this.synthesizing = true;
-      const filename = this.activeTab === 'pdf' && this.uploadedFile 
+      this.synthesisProgress = 0;
+      const reqId = Math.random().toString(36).substring(2, 10);
+
+      this.progressInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`/tts/api/progress/${reqId}`);
+          if (res.ok) {
+            const data = await res.json();
+            this.synthesisProgress = data.progress;
+          }
+        } catch (e) {}
+      }, 1000);
+
+      const filename = this.activeTab === 'pdf' && this.uploadedFile
         ? this.uploadedFile.name 
         : `文段朗读 ${new Date().toLocaleTimeString()}`;
         
@@ -579,7 +627,8 @@ export default {
             voice: this.voice,
             rate: this.speedRate,
             sentence_pause_ms: this.sentencePause,
-            paragraph_pause_ms: this.paragraphPause
+            paragraph_pause_ms: this.paragraphPause,
+            req_id: reqId
           })
         });
 
@@ -597,8 +646,6 @@ export default {
           rate: this.speedRate
         });
         
-        alert('合成成功！');
-        
         // Refresh synthesis history list
         this.fetchHistory();
       } catch (err) {
@@ -610,6 +657,11 @@ export default {
         });
       } finally {
         this.synthesizing = false;
+        if (this.progressInterval) {
+          clearInterval(this.progressInterval);
+          this.progressInterval = null;
+        }
+        this.synthesisProgress = 0;
       }
     },
 
@@ -639,6 +691,45 @@ export default {
           this.isPlaying = true;
         }
       });
+    },
+
+    // Delete Task logic
+    confirmDeleteTask(task) {
+      if (confirm(`确定要删除历史记录 "${task.filename}" 及对应的音频文件吗？\n删除后无法恢复。`)) {
+        this.deleteTask(task);
+      }
+    },
+    async deleteTask(task) {
+      try {
+        const response = await fetch(`/tts/api/tasks/${task.id}`, {
+          method: 'DELETE'
+        });
+
+        if (!response.ok) {
+          throw new Error('删除失败，可能记录已被删除或网络异常');
+        }
+
+        // Remove from list
+        this.tasks = this.tasks.filter(t => t.id !== task.id);
+
+        // Stop playing if the deleted task is currently playing
+        if (this.audioUrl === task.audio_url) {
+          const player = this.$refs.audioPlayer;
+          if (player) {
+            player.pause();
+          }
+          this.audioUrl = '';
+          this.nowPlayingTitle = '';
+          this.nowPlayingVoice = '';
+          this.nowPlayingRate = '';
+          this.isPlaying = false;
+          this.currentTime = 0;
+          this.duration = 0;
+        }
+      } catch (err) {
+        console.error(err);
+        alert(err.message);
+      }
     },
 
     // Hidden Audio Player controls
@@ -825,6 +916,7 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 30px;
+  min-width: 0;
 }
 
 /* Glassmorphism Cards */
@@ -988,6 +1080,18 @@ export default {
 }
 
 /* Spinner Loader */
+.upload-progress-ring {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.ring-text {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 700;
+  color: #818cf8;
+}
 .spinner {
   width: 32px;
   height: 32px;
@@ -1459,6 +1563,22 @@ export default {
   font-size: 10px;
   color: #475569;
 }
+.delete-task-btn {
+  background: transparent;
+  border: none;
+  color: #475569;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: all 0.2s;
+}
+.delete-task-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
 .history-empty {
   display: flex;
   justify-content: center;
@@ -1476,6 +1596,27 @@ export default {
 }
 .glow-on-hover:hover {
   box-shadow: 0 0 15px rgba(99, 102, 241, 0.25);
+}
+.progress-button {
+  position: relative;
+  overflow: hidden;
+}
+.btn-progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.15);
+  transition: width 0.3s ease;
+  z-index: 1;
+}
+.btn-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 /* Responsive constraints */
