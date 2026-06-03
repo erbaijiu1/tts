@@ -13,8 +13,8 @@
           </svg>
         </div>
         <div class="logo-text">
-          <h1>TTS 本地听书系统</h1>
-          <p>Local Audiobook Station (MVP)</p>
+          <h1>TTS 听书系统</h1>
+          <p>Audiobook Station</p>
         </div>
       </div>
       <div class="system-status">
@@ -69,7 +69,7 @@
                   <input type="checkbox" v-model="isLLMMode" />
                   <span class="slider round"></span>
                 </label>
-                <span class="toggle-label" @click="isLLMMode = !isLLMMode" style="cursor:pointer;">开启大模型深度清洗 (适用于带水印/乱码的PDF)</span>
+                <span class="toggle-label" @click="isLLMMode = !isLLMMode" style="cursor:pointer;">开启大模型深度清洗 (适用于带水印/乱码的PDF或图片)</span>
               </div>
               
               <div 
@@ -85,8 +85,8 @@
                   type="file" 
                   ref="fileInput" 
                   @change="handleFileSelect" 
-                  accept=".pdf,application/pdf"
-                  style="display: none;" 
+                  accept=".pdf,application/pdf,image/png,image/jpeg,image/webp,image/*"
+                  style="display: none;"
                 />
                 
                 <div class="dropzone-inner" v-if="!uploadedFile && !uploading">
@@ -95,17 +95,17 @@
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v12m0 0l-3-3m3 3l3-3m-9-6a9 9 0 1118 0c0 .347-.02.688-.06 1.025M12 3c-4.97 0-9 4.03-9 9a8.96 8.96 0 002.32 6" />
                     </svg>
                   </div>
-                  <p class="main-msg">拖拽 PDF 文件到此处，或<span>点击上传</span></p>
-                  <p class="sub-msg">仅支持 PDF 格式文件</p>
+                  <p class="main-msg">拖拽 PDF 或图片文件到此处，或<span>点击上传</span></p>
+                  <p class="sub-msg">支持 PDF 和常见图片格式文件</p>
                 </div>
 
                 <div class="dropzone-inner" v-else-if="uploading">
                   <div class="upload-progress-ring">
-                    <div class="spinner" :style="isLLMMode ? 'width: 48px; height: 48px; border-width: 4px;' : ''"></div>
-                    <div v-if="isLLMMode && uploadProgress > 0" class="ring-text">{{ uploadProgress }}%</div>
+                    <div class="spinner" :style="(isLLMMode || (uploadedFile && uploadedFile.type.startsWith('image/'))) ? 'width: 48px; height: 48px; border-width: 4px;' : ''"></div>
+                    <div v-if="(isLLMMode || (uploadedFile && uploadedFile.type.startsWith('image/'))) && uploadProgress > 0" class="ring-text">{{ uploadProgress }}%</div>
                   </div>
-                  <p class="main-msg">{{ isLLMMode ? `正在逐页进行大模型深度清洗...` : '正在提取 PDF 文本...' }}</p>
-                  <p class="sub-msg">{{ isLLMMode ? '此过程可能需要几分钟，请耐心等待' : '提取段落与段落去重中' }}</p>
+                  <p class="main-msg">{{ (isLLMMode || (uploadedFile && uploadedFile.type.startsWith('image/'))) ? `正在进行深度清洗与提取...` : '正在提取文件文本...' }}</p>
+                  <p class="sub-msg">{{ (isLLMMode || (uploadedFile && uploadedFile.type.startsWith('image/'))) ? '此过程可能需要几分钟，请耐心等待' : '提取段落与段落去重中' }}</p>
                 </div>
 
                 <div class="dropzone-inner" v-else>
@@ -314,7 +314,7 @@
 
           <!-- Download Action -->
           <div class="download-container" v-if="audioUrl">
-            <a :href="audioUrl" download class="btn-download glow-on-hover">
+            <a href="#" @click.prevent="downloadAudio" class="btn-download glow-on-hover">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
               </svg>
@@ -526,10 +526,11 @@ export default {
 
       if (file) {
         const isPdf = file.type === 'application/pdf' || (file.name && file.name.toLowerCase().endsWith('.pdf'));
-        if (isPdf) {
+        const isImage = file.type.startsWith('image/') || (file.name && /\.(png|jpe?g|webp)$/i.test(file.name));
+        if (isPdf || isImage) {
           this.uploadFile(file);
         } else {
-          alert('仅支持 PDF 文件');
+          alert('仅支持 PDF 和图片文件');
         }
       }
     },
@@ -551,8 +552,11 @@ export default {
       formData.append('mode', this.isLLMMode ? 'llm' : 'standard');
       formData.append('req_id', reqId);
 
+      const isImage = file.type.startsWith('image/') || (file.name && /\.(png|jpe?g|webp)$/i.test(file.name));
+      const requiresLLM = this.isLLMMode || isImage;
+
       const progressInterval = setInterval(async () => {
-        if (!this.isLLMMode) return;
+        if (!requiresLLM) return;
         try {
           const res = await fetch(`/tts/api/progress/${reqId}`);
           if (res.ok) {
@@ -569,7 +573,7 @@ export default {
         });
         
         if (!response.ok) {
-          throw new Error('PDF 文本解析失败，请检查文件格式。');
+          throw new Error('文件解析失败，请检查文件格式或重试。');
         }
         
         const data = await response.json();
@@ -767,31 +771,48 @@ export default {
     },
     onAudioEnded() {
       this.isPlaying = false;
-      this.currentTime = 0;
     },
-    togglePlayRate() {
-      const rates = [1.0, 1.2, 1.5, 1.8, 2.0, 0.8];
-      const currentIndex = rates.indexOf(this.playbackRate);
-      const nextIndex = (currentIndex + 1) % rates.length;
-      this.playbackRate = rates[nextIndex];
-      
-      const player = this.$refs.audioPlayer;
-      if (player) {
-        player.playbackRate = this.playbackRate;
-      }
-    },
-    toggleMute() {
-      this.isMuted = !this.isMuted;
-      const player = this.$refs.audioPlayer;
-      if (player) {
-        player.volume = this.isMuted ? 0 : this.volume;
-      }
-    },
-    adjustVolume() {
-      this.isMuted = false;
-      const player = this.$refs.audioPlayer;
-      if (player) {
-        player.volume = this.volume;
+    async downloadAudio() {
+      if (!this.audioUrl) return;
+      try {
+        let fetchUrl = this.audioUrl;
+        try {
+          const parsed = new URL(this.audioUrl);
+          fetchUrl = parsed.pathname; // This forces the browser to route through the proxy/same-origin
+        } catch (e) {
+          // If already relative, do nothing
+        }
+
+        const response = await fetch(fetchUrl);
+        if (!response.ok) throw new Error('Fetch failed');
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        let baseName = this.nowPlayingTitle || '听书音频';
+        // Remove file extension if exists
+        baseName = baseName.replace(/\.[^/.]+$/, '');
+        a.download = `${baseName}.mp3`;
+
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => {
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(url);
+        }, 100);
+      } catch (err) {
+        console.error('Download failed', err);
+        // Fallback
+        const a = document.createElement('a');
+        a.href = this.audioUrl;
+        let baseName = this.nowPlayingTitle || '听书音频';
+        a.download = `${baseName.replace(/\.[^/.]+$/, '')}.mp3`;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
       }
     }
   }

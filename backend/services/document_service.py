@@ -93,7 +93,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
                 raw_text += page_text + "\n"
     return raw_text
 
-def extract_text_with_llm(pdf_path: str, progress_callback=None) -> str:
+def extract_text_with_llm(file_path: str, progress_callback=None) -> str:
     import fitz
     import base64
     import os
@@ -125,8 +125,6 @@ def extract_text_with_llm(pdf_path: str, progress_callback=None) -> str:
             base_url=BASE_URL if BASE_URL else None
         )
 
-    # Open PDF and convert pages to base64-encoded JPEGs
-    doc = fitz.open(pdf_path)
     instruction = (
         "你是一个专业的 OCR 和适合「听书」的文本排版助手。请提取图片中的全部正文内容，自动忽略并去除所有斜向水印、背景文字以及页眉页脚。"
         "如果遇到被换行截断的句子，请拼接完整。"
@@ -138,11 +136,61 @@ def extract_text_with_llm(pdf_path: str, progress_callback=None) -> str:
     
     extracted_text_parts = []
     
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        mat = fitz.Matrix(4.0, 4.0)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        img_bytes = pix.tobytes("jpeg")
+    is_pdf = file_path.lower().endswith('.pdf')
+    
+    if is_pdf:
+        # Open PDF and convert pages to base64-encoded JPEGs
+        doc = fitz.open(file_path)
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            mat = fitz.Matrix(4.0, 4.0)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img_bytes = pix.tobytes("jpeg")
+            base64_img = base64.b64encode(img_bytes).decode('utf-8')
+            
+            content = [
+                {"type": "text", "text": instruction},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_img}"
+                    }
+                }
+            ]
+            
+            try:
+                response = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=[{"role": "user", "content": content}],
+                    temperature=0.01
+                )
+                try:
+                    page_text = response.choices[0].message.content.strip()
+                except Exception:
+                    try:
+                        page_text = response.choices[0].text.strip()
+                    except Exception:
+                        page_text = str(response).strip()
+                
+                extracted_text_parts.append(page_text)
+                logger.info(f"Successfully extracted text for page {page_num + 1}/{len(doc)}")
+                
+                if progress_callback:
+                    progress_callback(((page_num + 1) / len(doc)) * 100)
+            except Exception as e:
+                logger.error(f"LLM extraction failed on page {page_num + 1}: {str(e)}", exc_info=True)
+                raise Exception(f"LLM extraction failed on page {page_num + 1}: {str(e)}")
+    else:
+        # Native Image Process
+        with open(file_path, "rb") as f:
+            img_bytes = f.read()
+        
+        mime_type = "image/jpeg"
+        if file_path.lower().endswith(".png"):
+            mime_type = "image/png"
+        elif file_path.lower().endswith(".webp"):
+            mime_type = "image/webp"
+            
         base64_img = base64.b64encode(img_bytes).decode('utf-8')
         
         content = [
@@ -150,7 +198,7 @@ def extract_text_with_llm(pdf_path: str, progress_callback=None) -> str:
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{base64_img}"
+                    "url": f"data:{mime_type};base64,{base64_img}"
                 }
             }
         ]
@@ -161,7 +209,6 @@ def extract_text_with_llm(pdf_path: str, progress_callback=None) -> str:
                 messages=[{"role": "user", "content": content}],
                 temperature=0.01
             )
-            # Best-effort extraction of text from response
             try:
                 page_text = response.choices[0].message.content.strip()
             except Exception:
@@ -171,13 +218,13 @@ def extract_text_with_llm(pdf_path: str, progress_callback=None) -> str:
                     page_text = str(response).strip()
             
             extracted_text_parts.append(page_text)
-            logger.info(f"Successfully extracted text for page {page_num + 1}/{len(doc)}")
+            logger.info("Successfully extracted text from single image.")
             
             if progress_callback:
-                progress_callback(((page_num + 1) / len(doc)) * 100)
+                progress_callback(100)
         except Exception as e:
-            logger.error(f"LLM extraction failed on page {page_num + 1}: {str(e)}", exc_info=True)
-            raise Exception(f"LLM extraction failed on page {page_num + 1}: {str(e)}")
+            logger.error(f"LLM extraction failed for image: {str(e)}", exc_info=True)
+            raise Exception(f"LLM extraction failed for image: {str(e)}")
             
     return "\n\n".join(extracted_text_parts)
 

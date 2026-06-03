@@ -28,3 +28,4 @@ backend/data/output_audio/*.pdf
 backend/data/uploads/
 backend/data/
 backend/.idea/
+.idea/

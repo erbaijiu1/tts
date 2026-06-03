@@ -81,10 +81,14 @@ def upload_pdf(
     req_id: Optional[str] = Form(None)
 ):
     """
-    Endpoint to receive a PDF file, extract text, clean layout, and return it.
+    Endpoint to receive a file (PDF or Image), extract text, clean layout, and return it.
     """
-    if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    ext = file.filename.lower()
+    is_pdf = ext.endswith('.pdf')
+    is_img = ext.endswith(('.png', '.jpg', '.jpeg', '.webp'))
+    
+    if not (is_pdf or is_img):
+        raise HTTPException(status_code=400, detail="Only PDF or Image (PNG/JPG/WEBP) files are supported.")
         
     temp_filename = f"{uuid.uuid4()}_{file.filename}"
     temp_path = os.path.join(UPLOAD_DIR, temp_filename)
@@ -101,9 +105,10 @@ def upload_pdf(
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Parse PDF text
+        # Parse text from file
         try:
-            if mode == "llm":
+            # Images natively require multimodal LLM extraction here
+            if mode == "llm" or is_img:
                 cleaned_text = extract_text_with_llm(temp_path, progress_callback=update_progress)
                 raw_text = cleaned_text
             else:
