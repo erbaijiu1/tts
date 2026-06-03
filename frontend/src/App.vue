@@ -279,6 +279,13 @@
                 {{ playbackRate }}x
               </div>
 
+              <!-- Rewind 10s -->
+              <button class="skip-btn" @click="skipAudio(-10)" :disabled="!audioUrl" title="后退10秒">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/>
+                </svg>
+              </button>
+
               <!-- Main Play/Pause -->
               <button class="play-btn" @click="togglePlay" :disabled="!audioUrl">
                 <svg v-if="!isPlaying" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
@@ -286,6 +293,13 @@
                 </svg>
                 <svg v-else viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
                   <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                </svg>
+              </button>
+
+              <!-- Fast Forward 10s -->
+              <button class="skip-btn" @click="skipAudio(10)" :disabled="!audioUrl" title="快进10秒">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/>
                 </svg>
               </button>
 
@@ -744,7 +758,20 @@ export default {
       if (this.isPlaying) {
         player.pause();
         this.isPlaying = false;
+        this.lastPausedTime = Date.now();
       } else {
+        // 如果暂停时间超过5秒，在恢复播放时稍微后退2秒以帮助上下文衔接
+        if (this.lastPausedTime) {
+          const pausedDuration = Date.now() - this.lastPausedTime;
+          if (pausedDuration > 5000) {
+            let targetTime = player.currentTime - 2;
+            if (targetTime < 0) targetTime = 0;
+            player.currentTime = targetTime;
+            this.currentTime = targetTime;
+          }
+          this.lastPausedTime = null;
+        }
+
         player.play();
         this.isPlaying = true;
       }
@@ -753,6 +780,15 @@ export default {
       const player = this.$refs.audioPlayer;
       if (!player) return;
       const targetTime = parseFloat(e.target.value);
+      player.currentTime = targetTime;
+      this.currentTime = targetTime;
+    },
+    skipAudio(seconds) {
+      const player = this.$refs.audioPlayer;
+      if (!player) return;
+      let targetTime = player.currentTime + seconds;
+      if (targetTime < 0) targetTime = 0;
+      if (targetTime > this.duration) targetTime = this.duration;
       player.currentTime = targetTime;
       this.currentTime = targetTime;
     },
@@ -1433,6 +1469,25 @@ export default {
 }
 .play-btn:active {
   transform: scale(0.98);
+}
+.skip-btn {
+  background: transparent;
+  border: none;
+  color: #cbd5e1;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.skip-btn:hover:not(:disabled) {
+  color: white;
+  transform: scale(1.1);
+}
+.skip-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .volume-container {
   display: flex;
