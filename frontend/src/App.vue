@@ -454,12 +454,26 @@ export default {
     this.fetchHistory();
     window.addEventListener('beforeunload', this.saveProgress);
     window.addEventListener('paste', this.handlePaste);
+    window.addEventListener('keydown', this.handleKeydown);
   },
   beforeUnmount() {
     window.removeEventListener('beforeunload', this.saveProgress);
     window.removeEventListener('paste', this.handlePaste);
+    window.removeEventListener('keydown', this.handleKeydown);
   },
   methods: {
+    handleKeydown(event) {
+      if (event.code === 'Space' || event.key === ' ') {
+        const activeElement = document.activeElement;
+        if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.isContentEditable)) {
+          return;
+        }
+        if (this.audioUrl) {
+          event.preventDefault(); // Prevent page scroll
+          this.togglePlay();
+        }
+      }
+    },
     handlePaste(event) {
       if (this.activeTab !== 'pdf') return;
       
