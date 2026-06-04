@@ -275,8 +275,16 @@
             <!-- Buttons bar -->
             <div class="controls-bar">
               <!-- Playback Rate Selector -->
-              <div class="rate-select-btn" @click="togglePlayRate">
-                {{ playbackRate }}x
+              <div class="rate-select-wrapper" @mouseenter="showRateMenu = true" @mouseleave="showRateMenu = false">
+                <div class="rate-select-btn">
+                  {{ Number.isInteger(playbackRate) ? playbackRate + '.0' : playbackRate }}x
+                </div>
+                <div class="rate-menu" v-if="showRateMenu">
+                  <div class="rate-item" v-for="rate in [0.75, 1.0, 1.25, 1.5, 2.0]" :key="rate" 
+                       @click.stop="setPlayRate(rate)" :class="{active: playbackRate === rate}">
+                    {{ Number.isInteger(rate) ? rate + '.0' : rate }}x
+                  </div>
+                </div>
               </div>
 
               <!-- Rewind 10s -->
@@ -433,6 +441,7 @@ export default {
       currentTime: 0,
       duration: 0,
       playbackRate: 1.0,
+      showRateMenu: false,
       volume: 0.8,
       isMuted: false,
       previousVolume: 0.8,
@@ -443,6 +452,10 @@ export default {
   },
   mounted() {
     this.fetchHistory();
+    window.addEventListener('beforeunload', this.saveProgress);
+  },
+  beforeUnmount() {
+    window.removeEventListener('beforeunload', this.saveProgress);
   },
   methods: {
     // Utility helpers
@@ -695,10 +708,14 @@ export default {
       }
     },
     loadTrack(task) {
+      if (this.audioUrl && this.isPlaying) {
+        this.saveProgress();
+      }
       this.audioUrl = task.audio_url;
       this.nowPlayingTitle = task.filename;
       this.nowPlayingVoice = task.voice;
       this.nowPlayingRate = task.rate;
+      this._hasRestoredProgress = false;
       
       // Load and autoplay
       this.$nextTick(() => {
@@ -759,6 +776,7 @@ export default {
         player.pause();
         this.isPlaying = false;
         this.lastPausedTime = Date.now();
+        this.saveProgress();
       } else {
         // 如果暂停时间超过5秒，在恢复播放时稍微后退2秒以帮助上下文衔接
         if (this.lastPausedTime) {
@@ -775,6 +793,14 @@ export default {
         player.play();
         this.isPlaying = true;
       }
+    },
+    setPlayRate(rate) {
+      this.playbackRate = rate;
+      const player = this.$refs.audioPlayer;
+      if (player) {
+        player.playbackRate = this.playbackRate;
+      }
+      this.showRateMenu = false;
     },
     seekAudio(e) {
       const player = this.$refs.audioPlayer;
@@ -796,6 +822,12 @@ export default {
       const player = this.$refs.audioPlayer;
       if (!player) return;
       this.currentTime = player.currentTime;
+      
+      const now = Date.now();
+      if (!this._lastSaveTime || now - this._lastSaveTime > 3000) {
+        this.saveProgress();
+        this._lastSaveTime = now;
+      }
     },
     onAudioLoaded() {
       const player = this.$refs.audioPlayer;
@@ -804,9 +836,34 @@ export default {
       // Sync initial playback speed and volume
       player.playbackRate = this.playbackRate;
       player.volume = this.isMuted ? 0 : this.volume;
+
+      // 恢复进度
+      if (this.audioUrl && !this._hasRestoredProgress) {
+        const key = `tts_progress_${encodeURIComponent(this.audioUrl)}`;
+        const savedTime = localStorage.getItem(key);
+        if (savedTime) {
+          const t = parseFloat(savedTime);
+          if (t > 0 && t < this.duration - 2) {
+            player.currentTime = t;
+            this.currentTime = t;
+          }
+        }
+        this._hasRestoredProgress = true;
+      }
     },
     onAudioEnded() {
       this.isPlaying = false;
+      this.clearProgress();
+    },
+    saveProgress() {
+      if (!this.audioUrl || !this.currentTime) return;
+      const key = `tts_progress_${encodeURIComponent(this.audioUrl)}`;
+      localStorage.setItem(key, this.currentTime.toString());
+    },
+    clearProgress() {
+      if (!this.audioUrl) return;
+      const key = `tts_progress_${encodeURIComponent(this.audioUrl)}`;
+      localStorage.removeItem(key);
     },
     async downloadAudio() {
       if (!this.audioUrl) return;
@@ -1448,6 +1505,53 @@ export default {
 .rate-select-btn:hover {
   background: rgba(255, 255, 255, 0.12);
   color: white;
+}
+.rate-select-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.rate-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(17, 25, 40, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 8px 0;
+  min-width: 80px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+/* 搭建透明“桥梁”，防止鼠标跨越8px间隙时触发mouseleave */
+.rate-menu::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 12px;
+  background: transparent;
+}
+.rate-item {
+  padding: 8px 16px;
+  color: #94a3b8;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.rate-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+}
+.rate-item.active {
+  color: #818cf8;
+  font-weight: bold;
+  background: rgba(129, 140, 248, 0.1);
 }
 .play-btn {
   background: white;
