@@ -594,10 +594,57 @@ export default {
         this.$refs.fileInput.value = '';
       }
     },
+    async compressImage(file) {
+      if (!file.type.startsWith('image/')) return file;
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const maxWidth = 1920;
+            const maxHeight = 1920;
+            let width = img.width;
+            let height = img.height;
+            if (width > maxWidth || height > maxHeight) {
+              if (width / height > maxWidth / maxHeight) {
+                height = Math.round(height * maxWidth / width);
+                width = maxWidth;
+              } else {
+                width = Math.round(width * maxHeight / height);
+                height = maxHeight;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.toBlob((blob) => {
+              if (blob) {
+                let newFileName = file.name || "image.jpg";
+                newFileName = newFileName.replace(/\.[^/.]+$/, "") + ".jpg";
+                const newFile = new File([blob], newFileName, { type: "image/jpeg" });
+                resolve(newFile);
+              } else {
+                resolve(file);
+              }
+            }, 'image/jpeg', 0.85);
+          };
+          img.onerror = () => resolve(file);
+          img.src = event.target.result;
+        };
+        reader.onerror = () => resolve(file);
+        reader.readAsDataURL(file);
+      });
+    },
     async uploadFile(file) {
       this.uploadedFile = file;
       this.uploading = true;
       this.uploadProgress = 0;
+      
+      if (file.type.startsWith('image/')) {
+        file = await this.compressImage(file);
+      }
 
       const reqId = Math.random().toString(36).substring(2, 10);
       const formData = new FormData();

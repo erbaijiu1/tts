@@ -83,9 +83,10 @@ def upload_pdf(
     """
     Endpoint to receive a file (PDF or Image), extract text, clean layout, and return it.
     """
-    ext = file.filename.lower()
-    is_pdf = ext.endswith('.pdf')
-    is_img = ext.endswith(('.png', '.jpg', '.jpeg', '.webp'))
+    content_type = file.content_type or ""
+    ext = file.filename.lower() if file.filename else ""
+    is_pdf = ext.endswith('.pdf') or content_type == 'application/pdf'
+    is_img = ext.endswith(('.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif')) or content_type.startswith('image/')
     
     if not (is_pdf or is_img):
         raise HTTPException(status_code=400, detail="Only PDF or Image (PNG/JPG/WEBP) files are supported.")
