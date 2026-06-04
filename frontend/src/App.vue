@@ -95,7 +95,7 @@
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v12m0 0l-3-3m3 3l3-3m-9-6a9 9 0 1118 0c0 .347-.02.688-.06 1.025M12 3c-4.97 0-9 4.03-9 9a8.96 8.96 0 002.32 6" />
                     </svg>
                   </div>
-                  <p class="main-msg">拖拽 PDF 或图片文件到此处，或<span>点击上传</span></p>
+                  <p class="main-msg">拖拽、粘贴(Ctrl+V) 或<span>点击上传</span> PDF/图片</p>
                   <p class="sub-msg">支持 PDF 和常见图片格式文件</p>
                 </div>
 
@@ -453,11 +453,37 @@ export default {
   mounted() {
     this.fetchHistory();
     window.addEventListener('beforeunload', this.saveProgress);
+    window.addEventListener('paste', this.handlePaste);
   },
   beforeUnmount() {
     window.removeEventListener('beforeunload', this.saveProgress);
+    window.removeEventListener('paste', this.handlePaste);
   },
   methods: {
+    handlePaste(event) {
+      if (this.activeTab !== 'pdf') return;
+      
+      const activeElement = document.activeElement;
+      if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
+        return;
+      }
+      const items = (event.clipboardData || window.clipboardData).items;
+      if (!items || items.length === 0) return;
+      
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          event.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            const extension = file.type.split('/')[1] || 'png';
+            const newFile = new File([file], `pasted_image_${new Date().getTime()}.${extension}`, { type: file.type });
+            this.uploadFile(newFile);
+            return;
+          }
+        }
+      }
+    },
     // Utility helpers
     getActiveText() {
       if (this.activeTab === 'text') {
