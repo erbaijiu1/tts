@@ -582,8 +582,10 @@ export default {
       const isImage = file.type.startsWith('image/') || (file.name && /\.(png|jpe?g|webp)$/i.test(file.name));
       const requiresLLM = this.isLLMMode || isImage;
 
-      const progressInterval = setInterval(async () => {
-        if (!requiresLLM) return;
+      let currentDelay = 1000;
+      let timeoutId = null;
+      const pollProgress = async () => {
+        if (!requiresLLM || !this.uploading) return;
         try {
           const res = await fetch(`/tts/api/progress/${reqId}`);
           if (res.ok) {
@@ -591,7 +593,11 @@ export default {
             this.uploadProgress = data.progress;
           }
         } catch (e) {}
-      }, 1000);
+        
+        currentDelay = Math.min(currentDelay + 1000, 5000);
+        timeoutId = setTimeout(pollProgress, currentDelay);
+      };
+      if (requiresLLM) pollProgress();
 
       try {
         const response = await fetch('/tts/api/upload', {
@@ -615,7 +621,7 @@ export default {
         this.resetUpload();
       } finally {
         this.uploading = false;
-        clearInterval(progressInterval);
+        if (timeoutId) clearTimeout(timeoutId);
         this.uploadProgress = 0;
       }
     },
@@ -632,7 +638,9 @@ export default {
       this.synthesisProgress = 0;
       const reqId = Math.random().toString(36).substring(2, 10);
 
-      this.progressInterval = setInterval(async () => {
+      let synthDelay = 1000;
+      const pollSynthProgress = async () => {
+        if (!this.synthesizing) return;
         try {
           const res = await fetch(`/tts/api/progress/${reqId}`);
           if (res.ok) {
@@ -640,7 +648,11 @@ export default {
             this.synthesisProgress = data.progress;
           }
         } catch (e) {}
-      }, 1000);
+        
+        synthDelay = Math.min(synthDelay + 1000, 5000);
+        this.progressInterval = setTimeout(pollSynthProgress, synthDelay);
+      };
+      this.progressInterval = setTimeout(pollSynthProgress, synthDelay);
 
       const filename = this.activeTab === 'pdf' && this.uploadedFile
         ? this.uploadedFile.name 
@@ -689,7 +701,7 @@ export default {
       } finally {
         this.synthesizing = false;
         if (this.progressInterval) {
-          clearInterval(this.progressInterval);
+          clearTimeout(this.progressInterval);
           this.progressInterval = null;
         }
         this.synthesisProgress = 0;
@@ -1224,12 +1236,13 @@ html, body, #app {
 .slider:before {
   position: absolute;
   content: "";
-  height: 18px;
-  width: 18px;
+  box-sizing: border-box;
+  height: 20px;
+  width: 20px;
   left: 3px;
-  bottom: 2px;
+  bottom: 1.5px;
   background-color: #fff;
-  border: 2px solid var(--border-color);
+  border: 2.5px solid var(--border-color);
   transition: .2s;
   border-radius: 50%;
 }
@@ -1237,7 +1250,7 @@ input:checked + .slider {
   background-color: var(--accent-secondary);
 }
 input:checked + .slider:before {
-  transform: translateX(20px);
+  transform: translateX(19px);
 }
 .toggle-label {
   font-family: var(--font-mono);
@@ -1791,6 +1804,51 @@ input:checked + .slider:before {
 @media (max-width: 900px) {
   .app-main-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-container {
+    padding: 15px;
+  }
+  
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 15px;
+    padding: 15px;
+  }
+  
+  .glass-card {
+    padding: 20px 15px;
+  }
+  
+  .settings-grid {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+
+  .action-bar {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .controls-bar {
+    flex-wrap: wrap;
+    gap: 15px;
+    justify-content: center;
+  }
+  
+  .volume-container {
+    width: 100%;
+    justify-content: center;
+    margin-top: 10px;
+  }
+  
+  .track-meta {
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
   }
 }
 
