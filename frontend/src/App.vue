@@ -460,6 +460,13 @@ export default {
     window.removeEventListener('beforeunload', this.saveProgress);
     window.removeEventListener('paste', this.handlePaste);
     window.removeEventListener('keydown', this.handleKeydown);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+      navigator.mediaSession.setActionHandler('seekbackward', null);
+      navigator.mediaSession.setActionHandler('seekforward', null);
+    }
   },
   methods: {
     handleKeydown(event) {
@@ -816,6 +823,8 @@ export default {
       this.nowPlayingRate = task.rate;
       this._hasRestoredProgress = false;
       
+      this.setupMediaSession(task.filename);
+      
       // Load and autoplay
       this.$nextTick(() => {
         const player = this.$refs.audioPlayer;
@@ -926,6 +935,43 @@ export default {
       if (!this._lastSaveTime || now - this._lastSaveTime > 3000) {
         this.saveProgress();
         this._lastSaveTime = now;
+      }
+    },
+    setupMediaSession(title) {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: title || '未知音频',
+          artist: 'TTS 听书系统',
+          album: '我的私有书库'
+        });
+
+        navigator.mediaSession.setActionHandler('play', () => {
+          const player = this.$refs.audioPlayer;
+          if (player) {
+            player.play();
+            this.isPlaying = true;
+          }
+        });
+        
+        navigator.mediaSession.setActionHandler('pause', () => {
+          const player = this.$refs.audioPlayer;
+          if (player) {
+            player.pause();
+            this.isPlaying = false;
+            this.lastPausedTime = Date.now();
+            this.saveProgress();
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+          const skipTime = details.seekOffset || 15;
+          this.skipAudio(-skipTime);
+        });
+        
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+          const skipTime = details.seekOffset || 15;
+          this.skipAudio(skipTime);
+        });
       }
     },
     onAudioLoaded() {
