@@ -1,38 +1,23 @@
 
 services:
   tts-backend:
-    build: ./backend
+    image: tts-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: tts-backend
     restart: always
     env_file:
-      - .env
+      - ../tts.env
     environment:
-      - PROJECT_NAME=tts
-      - DB_HOST=${DB_HOST:-127.0.0.1}
-      - DB_PORT=${DB_PORT:-3306}
-      - DB_USER=${DB_USER:-root}
-      - DB_PASSWORD=${DB_PASSWORD:-Gmcc@123}
-      - DB_NAME=${DB_NAME:-tts_db}
-    ports:
-      - "${APP_PORT:-8009}:8009"
+      PROJECT_NAME: tts
+      DB_HOST: mysql_db
+      DB_PORT: "3306"
+      DB_NAME: tts_db
+    depends_on:
+      mysql_db:
+        condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ../server_data/tts_data:/app/data
     networks:
       - web
-    # depends_on:
-    #   - mysql_db
-
-
-
-  # mysql_db:
-  #   image: mysql:8.0
-  #   container_name: tts-mysql
-  #   restart: always
-  #   environment:
-  #     - MYSQL_ROOT_PASSWORD=${DB_PASSWORD:-my@secure#password}
-  #     - MYSQL_DATABASE=tts_db
-  #   volumes:
-  #     - db_data:/var/lib/mysql
-
-volumes:
-  db_data:

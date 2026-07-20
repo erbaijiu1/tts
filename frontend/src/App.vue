@@ -746,11 +746,7 @@ export default {
         this.fetchHistory();
       } catch (err) {
         console.error(err);
-        uni.showModal({
-          title: '语音合成失败',
-          content: err.message || '服务器连接失败，请稍后重试。',
-          showCancel: false
-        });
+        alert('语音合成失败: ' + (err.message || '服务器连接失败，请稍后重试。'));
       } finally {
         this.synthesizing = false;
         if (this.progressInterval) {
