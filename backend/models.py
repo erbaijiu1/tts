@@ -6,6 +6,7 @@ class AudioTask(Base):
     __tablename__ = "audio_tasks"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, default=0, index=True)
     filename = Column(String(255), nullable=False)
     text_snippet = Column(Text, nullable=False)
     audio_url = Column(String(512), nullable=False)

@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   tts-backend:
@@ -18,17 +17,12 @@ services:
       - "${APP_PORT:-8009}:8009"
     volumes:
       - ./backend:/app
+    networks:
+      - web
     # depends_on:
     #   - mysql_db
 
-  # tts-frontend:
-  #   build: ./frontend
-  #   container_name: tts-frontend
-  #   restart: always
-  #   ports:
-  #     - "80:80"
-  #   depends_on:
-  #     - tts-backend
+
 
   # mysql_db:
   #   image: mysql:8.0

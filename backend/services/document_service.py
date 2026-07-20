@@ -93,6 +93,90 @@ def extract_text_from_pdf(pdf_path: str) -> str:
                 raw_text += page_text + "\n"
     return raw_text
 
+def slice_long_image(image_path: str, max_height: int = 1000) -> list[bytes]:
+    try:
+        from PIL import Image
+        import io
+    except ImportError:
+        # Fallback if Pillow is not available, just return the whole image bytes
+        with open(image_path, "rb") as f:
+            return [f.read()]
+
+    try:
+        img = Image.open(image_path)
+        # Ensure RGB to avoid issues with alpha channels when saving as JPEG
+        if img.mode in ('RGBA', 'LA', 'P'):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            if img.mode in ('RGBA', 'LA'):
+                background.paste(img, mask=img.split()[-1])
+            img = background
+        else:
+            img = img.convert('RGB')
+            
+        width, height = img.size
+        
+        # If the image is not that tall, just return it as a single piece
+        if height <= max_height or height <= width * 1.2:
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=95)
+            return [buf.getvalue()]
+            
+        # It's a long image, we need to slice it smartly.
+        # Convert to grayscale and resize to 1 pixel width to get average row brightness
+        gray = img.convert('L')
+        row_averages = gray.resize((1, height))
+        pixels = row_averages.load()
+        
+        pieces = []
+        current_y = 0
+        
+        while current_y < height:
+            # We want to find a cut point between current_y + max_height*0.7 and current_y + max_height
+            target_y = min(current_y + max_height, height)
+            
+            if target_y == height:
+                box = (0, current_y, width, target_y)
+                cropped = img.crop(box)
+                buf = io.BytesIO()
+                cropped.save(buf, format='JPEG', quality=95)
+                pieces.append(buf.getvalue())
+                break
+                
+            # Search for a good cut point (white space) in a window before target_y
+            search_start = int(current_y + max_height * 0.7)
+            search_end = target_y
+            
+            best_cut_y = target_y
+            best_white_score = 0
+            
+            for y in range(search_end, search_start, -1):
+                # We check a small band of pixels (e.g. 5 pixels high) if possible, but 1 row is ok for simple cases
+                brightness = pixels[0, y]
+                if brightness > best_white_score:
+                    best_white_score = brightness
+                    best_cut_y = y
+                if best_white_score >= 253:  # Found a very white row, cut here!
+                    best_cut_y = y
+                    break
+                    
+            box = (0, current_y, width, best_cut_y)
+            cropped = img.crop(box)
+            buf = io.BytesIO()
+            cropped.save(buf, format='JPEG', quality=95)
+            pieces.append(buf.getvalue())
+            
+            current_y = best_cut_y
+            
+        return pieces
+    except Exception as e:
+        # Fallback to reading the raw bytes if anything goes wrong
+        from logger import logger
+        logger.error(f"Image slicing failed, falling back to raw image: {str(e)}")
+        with open(image_path, "rb") as f:
+            return [f.read()]
+
 def extract_text_with_llm(file_path: str, progress_callback=None) -> str:
     import fitz
     import base64
@@ -126,12 +210,12 @@ def extract_text_with_llm(file_path: str, progress_callback=None) -> str:
         )
 
     instruction = (
-        "你是一个专业的 OCR 和适合「听书」的文本排版助手。请提取图片中的全部正文内容，自动忽略并去除所有斜向水印、背景文字以及页眉页脚。"
-        "如果遇到被换行截断的句子，请拼接完整。"
-        "【重要要求】：这份文本将被直接用于语音合成（TTS）朗读。如果图片中包含「表格、对比图、思维导图」等多维结构，"
-        "请千万不要按字面生硬拼接，而是将其转化为适合听众理解的「自然语言叙述」或「线性陈述」。"
-        "例如：不要输出“产品：股票50 | 收入方式 ： 前端”，而是转化为完整的陈述句：“产品股票50的收入方式为前端”。"
-        "只需返回排版好的纯文本，无需加 Markdown 标记，无需解释。"
+        "【绝对指令】你是一个极其严格的 OCR 文本提取机器人。你的唯一任务是逐字逐句地识别并提取图片中的「正文文本」，并且不要对内容做任何主观概括或总结！\n"
+        "1. 严禁概括：禁止使用“由于图片文字密集...”、“根据图表显示...”等概括性、描述性的废话。必须输出原文！\n"
+        "2. 严禁解释：不要输出任何抱歉的话语，即使文字模糊，也要尽你最大可能去识别。\n"
+        "3. 图表处理：遇到纯图表可以跳过里面的数据，但【必须】提取图表上方、下方和周围的段落文字、分析说明！\n"
+        "4. 格式清洗：自动忽略斜向水印、背景文字以及页眉页脚；遇到被换行截断的句子，请拼接完整。\n"
+        "只需返回排版好的纯文本，无需加 Markdown 标记，不要回答任何与原文无关的话。"
     )
     
     extracted_text_parts = []
@@ -181,50 +265,71 @@ def extract_text_with_llm(file_path: str, progress_callback=None) -> str:
                 logger.error(f"LLM extraction failed on page {page_num + 1}: {str(e)}", exc_info=True)
                 raise Exception(f"LLM extraction failed on page {page_num + 1}: {str(e)}")
     else:
-        # Native Image Process
-        with open(file_path, "rb") as f:
-            img_bytes = f.read()
+        # Native Image Process with Smart Slicing
+        image_pieces = slice_long_image(file_path, max_height=1000)
         
-        mime_type = "image/jpeg"
-        if file_path.lower().endswith(".png"):
-            mime_type = "image/png"
-        elif file_path.lower().endswith(".webp"):
-            mime_type = "image/webp"
-            
-        base64_img = base64.b64encode(img_bytes).decode('utf-8')
+        # DEBUG: 将切片图片临时保存到 backend/temp_slices 目录供本地查看 (默认关闭)
+        DEBUG_SAVE_SLICES = False
         
-        content = [
-            {"type": "text", "text": instruction},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{mime_type};base64,{base64_img}"
-                }
-            }
-        ]
-        
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[{"role": "user", "content": content}],
-                temperature=0.01
-            )
+        if DEBUG_SAVE_SLICES:
+            debug_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp_slices")
+            os.makedirs(debug_dir, exist_ok=True)
             try:
-                page_text = response.choices[0].message.content.strip()
-            except Exception:
+                # 清理旧的切片
+                for f in os.listdir(debug_dir):
+                    if f.endswith('.jpg') or f.endswith('.png'):
+                        os.remove(os.path.join(debug_dir, f))
+            except Exception as e:
+                logger.warning(f"Failed to clear old slices: {e}")
+                
+            for i, img_bytes in enumerate(image_pieces):
+                with open(os.path.join(debug_dir, f"slice_{i}.jpg"), "wb") as f:
+                    f.write(img_bytes)
+                
+        for i, img_bytes in enumerate(image_pieces):
+            mime_type = "image/jpeg" # slice_long_image returns JPEG bytes by default
+            
+            # If it returned raw bytes because of fallback and it's png/webp
+            if len(image_pieces) == 1:
+                if file_path.lower().endswith(".png"):
+                    mime_type = "image/png"
+                elif file_path.lower().endswith(".webp"):
+                    mime_type = "image/webp"
+                
+            base64_img = base64.b64encode(img_bytes).decode('utf-8')
+            
+            content = [
+                {"type": "text", "text": instruction},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{base64_img}"
+                    }
+                }
+            ]
+            
+            try:
+                response = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=[{"role": "user", "content": content}],
+                    temperature=0.01
+                )
                 try:
-                    page_text = response.choices[0].text.strip()
+                    page_text = response.choices[0].message.content.strip()
                 except Exception:
-                    page_text = str(response).strip()
-            
-            extracted_text_parts.append(page_text)
-            logger.info("Successfully extracted text from single image.")
-            
-            if progress_callback:
-                progress_callback(100)
-        except Exception as e:
-            logger.error(f"LLM extraction failed for image: {str(e)}", exc_info=True)
-            raise Exception(f"LLM extraction failed for image: {str(e)}")
+                    try:
+                        page_text = response.choices[0].text.strip()
+                    except Exception:
+                        page_text = str(response).strip()
+                
+                extracted_text_parts.append(page_text)
+                logger.info(f"Successfully extracted text from image slice {i + 1}/{len(image_pieces)}.")
+                
+                if progress_callback:
+                    progress_callback(((i + 1) / len(image_pieces)) * 100)
+            except Exception as e:
+                logger.error(f"LLM extraction failed for image slice {i + 1}: {str(e)}", exc_info=True)
+                raise Exception(f"LLM extraction failed for image slice {i + 1}: {str(e)}")
             
     return "\n\n".join(extracted_text_parts)
 

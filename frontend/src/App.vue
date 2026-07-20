@@ -69,7 +69,7 @@
                   <input type="checkbox" v-model="isLLMMode" />
                   <span class="slider round"></span>
                 </label>
-                <span class="toggle-label" @click="isLLMMode = !isLLMMode" style="cursor:pointer;">开启大模型深度清洗 (适用于带水印/乱码的PDF或图片)</span>
+                <span class="toggle-label" @click="isLLMMode = !isLLMMode" style="cursor:pointer;">开启智能去水印与纯净排版 (长图或带水印的PDF必备)</span>
               </div>
               
               <div 
@@ -617,46 +617,9 @@ export default {
     },
     async compressImage(file) {
       if (!file.type.startsWith('image/')) return file;
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const img = new Image();
-          img.onload = () => {
-            const maxWidth = 1920;
-            const maxHeight = 1920;
-            let width = img.width;
-            let height = img.height;
-            if (width > maxWidth || height > maxHeight) {
-              if (width / height > maxWidth / maxHeight) {
-                height = Math.round(height * maxWidth / width);
-                width = maxWidth;
-              } else {
-                width = Math.round(width * maxHeight / height);
-                height = maxHeight;
-              }
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, width, height);
-            canvas.toBlob((blob) => {
-              if (blob) {
-                let newFileName = file.name || "image.jpg";
-                newFileName = newFileName.replace(/\.[^/.]+$/, "") + ".jpg";
-                const newFile = new File([blob], newFileName, { type: "image/jpeg" });
-                resolve(newFile);
-              } else {
-                resolve(file);
-              }
-            }, 'image/jpeg', 0.85);
-          };
-          img.onerror = () => resolve(file);
-          img.src = event.target.result;
-        };
-        reader.onerror = () => resolve(file);
-        reader.readAsDataURL(file);
-      });
+      // 禁用前端图片压缩，保留长图和高清图的原始分辨率，由后端进行长图智能切片
+      // 否则长图会被强行压缩到 1920 高度，导致文字只有几个像素，完全无法进行 OCR 识别。
+      return file;
     },
     async uploadFile(file) {
       this.uploadedFile = file;
@@ -707,11 +670,7 @@ export default {
         this.cleanedText = data.cleaned_text;
       } catch (err) {
         console.error(err);
-        uni.showModal({
-          title: '上传失败',
-          content: err.message || '网络连接失败，请重试。',
-          showCancel: false
-        });
+        alert('上传失败: ' + (err.message || '网络连接失败，请重试。'));
         this.resetUpload();
       } finally {
         this.uploading = false;

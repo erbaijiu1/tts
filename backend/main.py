@@ -66,6 +66,10 @@ progress_store = {}
 # Create prefix router
 router = APIRouter(prefix=f"/{PROJECT_NAME}/api")
 
+def get_user_id(request: Request) -> int:
+    uid_str = request.headers.get("X-User-Id", "0")
+    return int(uid_str) if uid_str.isdigit() else 0
+
 @router.get("/progress/{req_id}")
 async def get_progress(req_id: str):
     return {"progress": progress_store.get(req_id, 0)}
@@ -138,7 +142,8 @@ def upload_pdf(
 async def synthesize_text(
     request: Request,
     payload: SynthesizeRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_user_id)
 ):
     """
     Endpoint to inject pauses and synthesize text asynchronously, returning the MP3 URL.
@@ -177,6 +182,7 @@ async def synthesize_text(
         
         # Log task into database
         new_task = AudioTask(
+            user_id=user_id,
             filename=payload.filename,
             text_snippet=payload.text[:100] + ("..." if len(payload.text) > 100 else ""),
             audio_url=audio_url,
@@ -204,13 +210,14 @@ async def synthesize_text(
 @router.get("/tasks")
 async def get_tasks_history(
     db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_user_id),
     limit: int = 20
 ):
     """
     Retrieves the history of voice synthesis tasks from PostgreSQL.
     """
     try:
-        query = select(AudioTask).order_by(AudioTask.created_at.desc()).limit(limit)
+        query = select(AudioTask).where(AudioTask.user_id == user_id).order_by(AudioTask.created_at.desc()).limit(limit)
         result = await db.execute(query)
         tasks = result.scalars().all()
         
@@ -232,13 +239,14 @@ async def get_tasks_history(
 @router.delete("/tasks/{task_id}")
 async def delete_task(
     task_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_user_id)
 ):
     """
     Deletes a voice synthesis task and its corresponding MP3 file.
     """
     try:
-        query = select(AudioTask).where(AudioTask.id == task_id)
+        query = select(AudioTask).where(AudioTask.id == task_id, AudioTask.user_id == user_id)
         result = await db.execute(query)
         task = result.scalars().first()
         
