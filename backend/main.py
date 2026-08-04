@@ -4,6 +4,7 @@ import uuid
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Depends, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -49,6 +50,16 @@ async def startup():
     async with engine.begin() as conn:
         # Create tables if they do not exist
         await conn.run_sync(Base.metadata.create_all)
+        # Safe migration for full_text and user_id
+        try:
+            await conn.execute(text("ALTER TABLE audio_tasks ADD COLUMN full_text LONGTEXT NULL;"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE audio_tasks ADD COLUMN user_id INT NOT NULL DEFAULT 0;"))
+            await conn.execute(text("CREATE INDEX ix_audio_tasks_user_id ON audio_tasks (user_id);"))
+        except Exception:
+            pass
 
 # Pydantic schemas
 class SynthesizeRequest(BaseModel):
@@ -60,6 +71,10 @@ class SynthesizeRequest(BaseModel):
     paragraph_pause_ms: Optional[int] = 1500
     req_id: Optional[str] = None
 
+class UpdateTaskRequest(BaseModel):
+    filename: Optional[str] = None
+    full_text: Optional[str] = None
+
 # Global store for synthesis progress
 progress_store = {}
 
@@ -67,8 +82,13 @@ progress_store = {}
 router = APIRouter(prefix=f"/{PROJECT_NAME}/api")
 
 def get_user_id(request: Request) -> int:
-    uid_str = request.headers.get("X-User-Id", "0")
-    return int(uid_str) if uid_str.isdigit() else 0
+    uid_str = (
+        request.headers.get("X-User-Id")
+        or request.cookies.get("user_id")
+        or request.query_params.get("user_id")
+        or "0"
+    )
+    return int(uid_str) if str(uid_str).isdigit() else 0
 
 @router.get("/progress/{req_id}")
 async def get_progress(req_id: str):
@@ -110,43 +130,46 @@ def upload_pdf(
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Parse text from file
-        try:
-            # Images natively require multimodal LLM extraction here
-            if mode == "llm" or is_img:
-                cleaned_text = extract_text_with_llm(temp_path, progress_callback=update_progress)
-                raw_text = cleaned_text
-            else:
-                raw_text = extract_text_from_pdf(temp_path)
-                cleaned_text = clean_and_format_text(raw_text)
-        except Exception as e:
-            logger.error(f"Failed to extract text from PDF: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+        logger.info(f"Uploaded file: {file.filename}, mode: {mode}")
         
+        # Branch extraction logic
+        if is_img or mode == "llm":
+            cleaned_text = extract_text_with_llm(temp_path, progress_callback=update_progress)
+        else:
+            raw_text = extract_text_from_pdf(temp_path)
+            if not raw_text.strip():
+                raise HTTPException(status_code=422, detail="No readable text found in the PDF.")
+            cleaned_text = clean_and_format_text(raw_text)
+            
         return {
             "filename": file.filename,
-            "raw_text_length": len(raw_text),
-            "cleaned_text_length": len(cleaned_text),
-            "cleaned_text": cleaned_text
+            "cleaned_text": cleaned_text,
+            "char_count": len(cleaned_text)
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+        logger.error(f"Error processing file {file.filename}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"File parsing error: {str(e)}")
     finally:
-        # Clean up temp file
+        # Cleanup uploaded local file
         if os.path.exists(temp_path):
-            os.remove(temp_path)
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
         if req_id and req_id in progress_store:
             del progress_store[req_id]
 
 @router.post("/synthesize")
 async def synthesize_text(
-    request: Request,
     payload: SynthesizeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_user_id)
 ):
     """
-    Endpoint to inject pauses and synthesize text asynchronously, returning the MP3 URL.
+    Endpoint to receive cleaned text, synthesize it with edge-tts, save as MP3, and log the task.
     """
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Text content cannot be empty.")
@@ -185,6 +208,7 @@ async def synthesize_text(
             user_id=user_id,
             filename=payload.filename,
             text_snippet=payload.text[:100] + ("..." if len(payload.text) > 100 else ""),
+            full_text=payload.text,
             audio_url=audio_url,
             voice=payload.voice,
             rate=payload.rate
@@ -197,6 +221,7 @@ async def synthesize_text(
         return {
             "task_id": new_task.id,
             "filename": new_task.filename,
+            "full_text": new_task.full_text,
             "audio_url": audio_url,
             "created_at": new_task.created_at
         }
@@ -211,10 +236,10 @@ async def synthesize_text(
 async def get_tasks_history(
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_user_id),
-    limit: int = 20
+    limit: int = 50
 ):
     """
-    Retrieves the history of voice synthesis tasks from PostgreSQL.
+    Retrieves the history of voice synthesis tasks from MySQL.
     """
     try:
         query = select(AudioTask).where(AudioTask.user_id == user_id).order_by(AudioTask.created_at.desc()).limit(limit)
@@ -226,6 +251,7 @@ async def get_tasks_history(
                 "id": task.id,
                 "filename": task.filename,
                 "text_snippet": task.text_snippet,
+                "full_text": task.full_text or task.text_snippet,
                 "audio_url": task.audio_url,
                 "voice": task.voice,
                 "rate": task.rate,
@@ -234,7 +260,54 @@ async def get_tasks_history(
             for task in tasks
         ]
     except Exception as e:
+        logger.error(f"Failed to fetch tasks history: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch tasks history: {str(e)}")
+
+@router.patch("/tasks/{task_id}")
+async def update_task(
+    task_id: int,
+    payload: UpdateTaskRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_user_id)
+):
+    """
+    Updates the title (filename) or full_text of a voice synthesis task.
+    """
+    try:
+        query = select(AudioTask).where(AudioTask.id == task_id, AudioTask.user_id == user_id)
+        result = await db.execute(query)
+        task = result.scalars().first()
+        
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+            
+        if payload.filename is not None:
+            new_title = payload.filename.strip()
+            if new_title:
+                task.filename = new_title
+                
+        if payload.full_text is not None:
+            task.full_text = payload.full_text
+            task.text_snippet = payload.full_text[:100] + ("..." if len(payload.full_text) > 100 else "")
+            
+        await db.commit()
+        await db.refresh(task)
+        
+        return {
+            "id": task.id,
+            "filename": task.filename,
+            "text_snippet": task.text_snippet,
+            "full_text": task.full_text,
+            "audio_url": task.audio_url,
+            "voice": task.voice,
+            "rate": task.rate,
+            "created_at": task.created_at
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update task {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update task: {str(e)}")
 
 @router.delete("/tasks/{task_id}")
 async def delete_task(

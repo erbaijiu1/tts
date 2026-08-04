@@ -1,5 +1,6 @@
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy.dialects.mysql import LONGTEXT
 from database import Base
 
 class AudioTask(Base):
@@ -9,6 +10,7 @@ class AudioTask(Base):
     user_id = Column(Integer, nullable=False, default=0, index=True)
     filename = Column(String(255), nullable=False)
     text_snippet = Column(Text, nullable=False)
+    full_text = Column(LONGTEXT, nullable=True)
     audio_url = Column(String(512), nullable=False)
     voice = Column(String(100), nullable=True)
     rate = Column(String(50), nullable=True)

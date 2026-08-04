@@ -14,7 +14,15 @@ escaped_password = urllib.parse.quote_plus(DB_PASSWORD)
 
 DATABASE_URL = f"mysql+aiomysql://{DB_USER}:{escaped_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_size=1,
+    max_overflow=2,
+    pool_timeout=10,
+    pool_recycle=300,
+    pool_pre_ping=True
+)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 

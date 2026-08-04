@@ -139,6 +139,16 @@
           <div class="settings-divider">TTS 朗读配置</div>
           
           <div class="settings-grid">
+            <div class="control-group full-width">
+              <label>朗读标题 / 题目 (可选自定义)</label>
+              <input 
+                type="text" 
+                v-model="customTitle" 
+                placeholder="例如：文章题目或章节名（未填写则根据内容/文件名自动生成）" 
+                class="styled-input"
+              />
+            </div>
+
             <div class="control-group">
               <label>发音人 (Voice)</label>
               <select v-model="voice" class="styled-select">
@@ -348,15 +358,25 @@
         <!-- History Log Tasks -->
         <div class="card glass-card history-card">
           <div class="history-header">
-            <h3>生成历史</h3>
-            <button class="refresh-btn" @click="fetchHistory">
+            <div class="history-title-box">
+              <h3>生成历史</h3>
+              <span class="history-count" v-if="tasks.length > 0">({{ tasks.length }})</span>
+            </div>
+            <button class="refresh-btn" :class="{ spinning: historyLoading }" @click="fetchHistory(0)" title="刷新历史记录">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
               </svg>
             </button>
           </div>
 
-          <div class="history-list" v-if="tasks.length > 0">
+          <!-- Loading state -->
+          <div class="history-loading-box" v-if="historyLoading && tasks.length === 0">
+            <div class="spinner-small"></div>
+            <span>正在载入历史任务...</span>
+          </div>
+
+          <!-- History items -->
+          <div class="history-list" v-else-if="tasks.length > 0">
             <div 
               v-for="task in tasks" 
               :key="task.id" 
@@ -364,13 +384,48 @@
               :class="{ active: audioUrl === task.audio_url }"
               @click="loadTrack(task)"
             >
-              <div class="item-play-icon">
+              <div class="item-play-icon" title="播放此音频">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                   <path d="M8 5v14l11-7z" />
                 </svg>
               </div>
               <div class="item-details">
-                <div class="item-title">{{ task.filename }}</div>
+                <!-- Title Row: normal vs edit mode -->
+                <div class="item-title-row">
+                  <div v-if="editingTaskId !== task.id" class="item-title-wrapper">
+                    <span class="item-title" :title="task.filename">{{ task.filename }}</span>
+                    <button
+                      class="icon-btn edit-title-btn"
+                      title="修改题目/标题"
+                      @click.stop="startEditTitle(task)"
+                    >
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div v-else class="item-title-edit" @click.stop>
+                    <input 
+                      ref="titleInput"
+                      v-model="editingTitleText" 
+                      class="inline-edit-input" 
+                      @keydown.enter="saveEditTitle(task)"
+                      @keydown.esc="cancelEditTitle"
+                      placeholder="输入新标题..."
+                    />
+                    <button class="icon-btn save-title-btn" title="保存" @click.stop="saveEditTitle(task)">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                      </svg>
+                    </button>
+                    <button class="icon-btn cancel-title-btn" title="取消" @click.stop="cancelEditTitle">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
                 <div class="item-preview">{{ task.text_snippet }}</div>
                 <div class="item-meta">
                   <span>{{ formatVoice(task.voice) }}</span>
@@ -378,16 +433,32 @@
                   <span>{{ formatDate(task.created_at) }}</span>
                 </div>
               </div>
-              <!-- Delete button -->
-              <button
-                class="delete-task-btn"
-                title="删除此记录"
-                @click.stop="confirmDeleteTask(task)"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
+
+              <!-- Item Actions -->
+              <div class="item-actions">
+                <!-- View / Restore text button -->
+                <button
+                  class="icon-action-btn view-text-btn"
+                  title="查看完整原文 / 载入到编辑器"
+                  @click.stop="openTextModal(task)"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                  <span>原文</span>
+                </button>
+
+                <!-- Delete button -->
+                <button
+                  class="icon-action-btn delete-task-btn"
+                  title="删除此记录"
+                  @click.stop="confirmDeleteTask(task)"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
           <div class="history-empty" v-else>
@@ -396,6 +467,35 @@
         </div>
       </section>
     </main>
+
+    <!-- Full Text Modal -->
+    <div class="modal-overlay" v-if="textModalOpen" @click="closeTextModal">
+      <div class="modal-card glass-card" @click.stop>
+        <div class="modal-header">
+          <div class="modal-title-area">
+            <span class="badge">朗读原文</span>
+            <h4>{{ currentModalTask?.filename || '文本内容' }}</h4>
+          </div>
+          <button class="modal-close-btn" @click="closeTextModal">✕</button>
+        </div>
+        <div class="modal-meta">
+          <span>字数: {{ (currentModalTask?.full_text || currentModalTask?.text_snippet || '').length }} 字</span>
+          <span>发音: {{ formatVoice(currentModalTask?.voice) }}</span>
+          <span>时间: {{ formatDate(currentModalTask?.created_at) }}</span>
+        </div>
+        <div class="modal-body">
+          <textarea class="modal-text-content" readonly :value="currentModalTask?.full_text || currentModalTask?.text_snippet"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button class="secondary-btn glow-on-hover" @click="copyModalText">
+            {{ copySuccess ? '✓ 已复制到剪贴板' : '复制全文' }}
+          </button>
+          <button class="primary-btn glow-on-hover" @click="restoreTextToEditor(currentModalTask)">
+            📥 填入左侧编辑器 (继续编辑 / 重新合成)
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -406,6 +506,7 @@ export default {
       activeTab: 'text',
       textInput: '',
       cleanedText: '',
+      customTitle: '',
       
       // Upload variables
       isDragging: false,
@@ -446,8 +547,16 @@ export default {
       isMuted: false,
       previousVolume: 0.8,
       
-      // Tasks history
-      tasks: []
+      // Tasks history & editing
+      tasks: [],
+      historyLoading: false,
+      editingTaskId: null,
+      editingTitleText: '',
+
+      // Text modal
+      textModalOpen: false,
+      currentModalTask: null,
+      copySuccess: false
     };
   },
   mounted() {
@@ -521,13 +630,12 @@ export default {
         'zh-CN-YunyangNeural': '云扬 (男声)',
         'zh-CN-XiaoyiNeural': '晓伊 (女声)',
         'zh-HK-HiuMaanNeural': '晓曼 (粤语)',
-        'zh-TW-HsiaoChenNeural': '晓臻 (闽南)'
+        'zh-TW-HsiaoChenNeural': '晓臻 (台湾)'
       };
       return mapping[voiceId] || voiceId;
     },
     formatSpeed(rate) {
-      if (!rate) return '1.0x';
-      if (rate === '+0%') return '1.0x';
+      if (!rate || rate === '+0%') return '1.0x';
       if (rate === '-20%') return '0.8x';
       if (rate === '+20%') return '1.2x';
       if (rate === '+50%') return '1.5x';
@@ -535,36 +643,26 @@ export default {
       return rate;
     },
     formatTime(seconds) {
-      if (isNaN(seconds) || seconds === null) return '00:00';
-      const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-      const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-      return `${m}:${s}`;
+      if (!seconds || isNaN(seconds)) return '00:00';
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     },
     formatDate(dateStr) {
       if (!dateStr) return '';
-      const date = new Date(dateStr);
-      const m = (date.getMonth() + 1).toString().padStart(2, '0');
-      const d = date.getDate().toString().padStart(2, '0');
-      const h = date.getHours().toString().padStart(2, '0');
-      const min = date.getMinutes().toString().padStart(2, '0');
-      return `${m}-${d} ${h}:${min}`;
+      const d = new Date(dateStr);
+      return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     },
     
     // Text Cleaning
     cleanTextInput() {
-      if (!this.textInput.trim()) return;
-      
-      // Simple frontend mock clean if backend not called:
-      // Remove double spacing and normalize paragraph ends
-      let cleaned = this.textInput
-        .replace(/\r\n/g, '\n')
-        .replace(/[ \t]+/g, ' ')
-        // Remove line breaks inside sentences for Chinese characters
-        .replace(/([\u4e00-\u9fa5]+)\n([\u4e00-\u9fa5]+)/g, '$1$2')
-        .trim();
-        
-      this.textInput = cleaned;
-      alert('文本已清洗');
+      if (!this.textInput) return;
+      let text = this.textInput;
+      text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      text = text.replace(/[ \t]+/g, ' ');
+      text = text.replace(/(\r\n|\r|\n){3,}/g, '\n\n');
+      text = text.split('\n').map(line => line.trim()).join('\n');
+      this.textInput = text.trim();
     },
 
     // File Upload handling
@@ -578,26 +676,27 @@ export default {
         if (fallback) fallback.click();
       }
     },
-    handleFileSelect(e) {
-      const files = e.target.files;
-      if (files.length > 0) {
-        this.uploadFile(files[0]);
+    handleDragOver() {
+      this.isDragging = true;
+    },
+    handleDragLeave() {
+      this.isDragging = false;
+    },
+    handleDrop(e) {
+      this.isDragging = false;
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        const isPdf = file.type === 'application/pdf' || (file.name && file.name.toLowerCase().endsWith('.pdf'));
+        const isImage = file.type.startsWith('image/') || (file.name && /\.(png|jpe?g|webp)$/i.test(file.name));
+        if (isPdf || isImage) {
+          this.uploadFile(file);
+        } else {
+          alert('仅支持 PDF 和图片文件');
+        }
       }
     },
-    handleFileDrop(e) {
-      this.isDragging = false;
-      let file = null;
-      if (e.dataTransfer.items) {
-        for (let i = 0; i < e.dataTransfer.items.length; i++) {
-          if (e.dataTransfer.items[i].kind === 'file') {
-            file = e.dataTransfer.items[i].getAsFile();
-            break;
-          }
-        }
-      } else if (e.dataTransfer.files.length > 0) {
-        file = e.dataTransfer.files[0];
-      }
-
+    handleFileSelect(e) {
+      const file = e.target.files[0];
       if (file) {
         const isPdf = file.type === 'application/pdf' || (file.name && file.name.toLowerCase().endsWith('.pdf'));
         const isImage = file.type.startsWith('image/') || (file.name && /\.(png|jpe?g|webp)$/i.test(file.name));
@@ -611,20 +710,22 @@ export default {
     resetUpload() {
       this.uploadedFile = null;
       this.cleanedText = '';
+      this.customTitle = '';
       if (this.$refs.fileInput) {
         this.$refs.fileInput.value = '';
       }
     },
     async compressImage(file) {
       if (!file.type.startsWith('image/')) return file;
-      // 禁用前端图片压缩，保留长图和高清图的原始分辨率，由后端进行长图智能切片
-      // 否则长图会被强行压缩到 1920 高度，导致文字只有几个像素，完全无法进行 OCR 识别。
       return file;
     },
     async uploadFile(file) {
       this.uploadedFile = file;
       this.uploading = true;
       this.uploadProgress = 0;
+      if (!this.customTitle) {
+        this.customTitle = file.name;
+      }
       
       if (file.type.startsWith('image/')) {
         file = await this.compressImage(file);
@@ -707,9 +808,17 @@ export default {
       };
       this.progressInterval = setTimeout(pollSynthProgress, synthDelay);
 
-      const filename = this.activeTab === 'pdf' && this.uploadedFile
-        ? this.uploadedFile.name 
-        : `文段朗读 ${new Date().toLocaleTimeString()}`;
+      const userTitle = this.customTitle ? this.customTitle.trim() : '';
+      let filename = userTitle;
+      if (!filename) {
+        if (this.activeTab === 'pdf' && this.uploadedFile) {
+          filename = this.uploadedFile.name;
+        } else {
+          // Extract first line snippet as title
+          const firstLine = text.trim().split('\n')[0].replace(/^[#\s\d.-]+/, '').trim().substring(0, 30);
+          filename = firstLine || `文段朗读 ${new Date().toLocaleTimeString()}`;
+        }
+      }
         
       try {
         const response = await fetch('/tts/api/synthesize', {
@@ -739,7 +848,8 @@ export default {
           filename: data.filename,
           audio_url: data.audio_url,
           voice: this.voice,
-          rate: this.speedRate
+          rate: this.speedRate,
+          full_text: data.full_text || text
         });
         
         // Refresh synthesis history list
@@ -757,15 +867,26 @@ export default {
       }
     },
 
-    // History Log loading
-    async fetchHistory() {
+    // History Log loading with auto-retry
+    async fetchHistory(retryCount = 0) {
+      this.historyLoading = true;
       try {
         const response = await fetch('/tts/api/tasks');
         if (response.ok) {
           this.tasks = await response.json();
+        } else {
+          throw new Error('获取历史记录失败');
         }
       } catch (err) {
-        console.warn('获取合成历史失败', err);
+        console.warn('获取合成历史失败:', err);
+        if (retryCount < 2) {
+          setTimeout(() => {
+            this.fetchHistory(retryCount + 1);
+          }, 1000);
+          return;
+        }
+      } finally {
+        this.historyLoading = false;
       }
     },
     loadTrack(task) {
@@ -789,6 +910,98 @@ export default {
           this.isPlaying = true;
         }
       });
+    },
+
+    // Inline Title Editing
+    startEditTitle(task) {
+      this.editingTaskId = task.id;
+      this.editingTitleText = task.filename;
+      this.$nextTick(() => {
+        const inputs = this.$refs.titleInput;
+        if (inputs) {
+          const input = Array.isArray(inputs) ? inputs[0] : inputs;
+          input?.focus();
+          input?.select();
+        }
+      });
+    },
+    cancelEditTitle() {
+      this.editingTaskId = null;
+      this.editingTitleText = '';
+    },
+    async saveEditTitle(task) {
+      const newTitle = this.editingTitleText.trim();
+      if (!newTitle) {
+        alert('标题不能为空');
+        return;
+      }
+      try {
+        const response = await fetch(`/tts/api/tasks/${task.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            filename: newTitle
+          })
+        });
+        if (!response.ok) {
+          throw new Error('修改标题失败');
+        }
+        const updated = await response.json();
+        task.filename = updated.filename;
+        
+        // Sync player title & media session if currently playing
+        if (this.audioUrl === task.audio_url) {
+          this.nowPlayingTitle = updated.filename;
+          this.setupMediaSession(updated.filename);
+        }
+        this.cancelEditTitle();
+      } catch (err) {
+        alert('更新标题失败: ' + (err.message || '网络连接异常'));
+      }
+    },
+
+    // Full Text Modal & Editor Restore
+    openTextModal(task) {
+      this.currentModalTask = task;
+      this.textModalOpen = true;
+      this.copySuccess = false;
+    },
+    closeTextModal() {
+      this.textModalOpen = false;
+      this.currentModalTask = null;
+      this.copySuccess = false;
+    },
+    async copyModalText() {
+      const text = this.currentModalTask?.full_text || this.currentModalTask?.text_snippet || '';
+      if (!text) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+        this.copySuccess = true;
+        setTimeout(() => {
+          this.copySuccess = false;
+        }, 2000);
+      } catch (e) {
+        alert('复制失败，请手动选择文字复制');
+      }
+    },
+    restoreTextToEditor(task) {
+      if (!task) return;
+      const text = task.full_text || task.text_snippet || '';
+      this.activeTab = 'text';
+      this.textInput = text;
+      this.customTitle = task.filename;
+      this.closeTextModal();
     },
 
     // Delete Task logic
@@ -1402,6 +1615,9 @@ input:checked + .slider:before {
   gap: 25px;
   margin-bottom: 30px;
 }
+.control-group.full-width {
+  grid-column: 1 / -1;
+}
 .control-group label {
   display: block;
   font-family: var(--font-mono);
@@ -1410,6 +1626,26 @@ input:checked + .slider:before {
   color: var(--text-muted);
   margin-bottom: 10px;
   text-transform: uppercase;
+}
+
+/* Styled Input */
+.styled-input {
+  width: 100%;
+  background: var(--bg-main);
+  color: var(--text-main);
+  border: var(--border-width) solid var(--border-color);
+  padding: 12px 15px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 14px;
+  border-radius: 6px;
+  outline: none;
+  box-shadow: 2px 2px 0 var(--border-color);
+  transition: all 0.15s ease;
+}
+.styled-input:focus {
+  background: #fff;
+  border-color: var(--accent-secondary);
 }
 
 /* Hardware Select */
@@ -1793,12 +2029,23 @@ input:checked + .slider:before {
   border-bottom: var(--border-width) solid var(--border-color);
   padding-bottom: 12px;
 }
+.history-title-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .history-header h3 {
   margin: 0;
   font-family: var(--font-ui);
   font-size: 16px;
   font-weight: 800;
   color: var(--text-main);
+}
+.history-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
 }
 .refresh-btn {
   background: var(--bg-main);
@@ -1808,42 +2055,73 @@ input:checked + .slider:before {
   color: var(--text-main);
   cursor: pointer;
   box-shadow: 1px 1px 0 var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .refresh-btn:active {
   transform: translate(1px, 1px);
   box-shadow: 0 0 0;
+}
+.refresh-btn.spinning svg {
+  animation: spin 0.8s linear infinite;
+}
+
+.history-loading-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 30px 10px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.spinner-small {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-secondary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .history-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 400px;
+  max-height: 440px;
   overflow-y: auto;
   padding-right: 5px;
 }
 .history-item {
   background: #fff;
   border: var(--border-width) solid var(--border-color);
-  padding: 15px;
+  padding: 14px 16px;
   border-radius: 8px;
   display: flex;
-  align-items: center;
-  gap: 15px;
+  align-items: flex-start;
+  gap: 12px;
   cursor: pointer;
   transition: all 0.1s;
   box-shadow: 2px 2px 0 var(--border-color);
 }
+.history-item:hover {
+  border-color: var(--accent-secondary);
+}
 .history-item:active {
-  transform: translate(2px, 2px);
-  box-shadow: 0 0 0 var(--border-color);
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--border-color);
 }
 .history-item.active {
   background: var(--bg-main);
   border-color: var(--accent-secondary);
 }
 .item-play-icon {
+  margin-top: 2px;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 .history-item.active .item-play-icon {
   color: var(--accent-secondary);
@@ -1852,16 +2130,72 @@ input:checked + .slider:before {
   flex: 1;
   min-width: 0;
 }
+.item-title-row {
+  margin-bottom: 4px;
+}
+.item-title-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .item-title {
   font-family: var(--font-ui);
   font-weight: 700;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--text-main);
-  margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.item-title-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.inline-edit-input {
+  flex: 1;
+  min-width: 0;
+  background: #fff;
+  border: var(--border-width) solid var(--accent-secondary);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  outline: none;
+}
+.icon-btn {
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+.icon-btn:hover {
+  color: var(--text-main);
+}
+.edit-title-btn:hover {
+  color: var(--accent-secondary);
+}
+.save-title-btn {
+  color: #10b981;
+}
+.save-title-btn:hover {
+  color: #059669;
+}
+.cancel-title-btn {
+  color: #ef4444;
+}
+.cancel-title-btn:hover {
+  color: #dc2626;
+}
+
 .item-preview {
   font-family: var(--font-ui);
   font-size: 13px;
@@ -1873,20 +2207,168 @@ input:checked + .slider:before {
 }
 .item-meta {
   display: flex;
-  gap: 15px;
+  gap: 12px;
   font-family: var(--font-mono);
   font-weight: 700;
   font-size: 11px;
   color: var(--text-muted);
 }
-.delete-task-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted);
+
+.item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  align-self: center;
+}
+.icon-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-main);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-main);
   cursor: pointer;
+  box-shadow: 1px 1px 0 var(--border-color);
+  transition: all 0.1s;
+}
+.icon-action-btn:hover {
+  background: #fff;
+  border-color: var(--accent-secondary);
+}
+.icon-action-btn:active {
+  transform: translate(1px, 1px);
+  box-shadow: 0 0 0;
+}
+.view-text-btn:hover {
+  color: var(--accent-secondary);
+}
+.delete-task-btn {
+  color: var(--text-muted);
+  padding: 4px 6px;
 }
 .delete-task-btn:hover {
   color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+/* Modal Popup */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+}
+.modal-card {
+  width: 100%;
+  max-width: 650px;
+  max-height: 85vh;
+  background: #fff;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-hard);
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  position: relative;
+  animation: modalFadeIn 0.2s ease-out;
+}
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: scale(0.96) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.modal-title-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.modal-title-area h4 {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modal-close-btn {
+  background: var(--bg-main);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 1px 1px 0 var(--border-color);
+}
+.modal-close-btn:hover {
+  background: var(--accent-primary);
+  color: #fff;
+}
+.modal-meta {
+  display: flex;
+  gap: 15px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 15px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border-color);
+}
+.modal-body {
+  flex: 1;
+  min-height: 200px;
+  max-height: 380px;
+  margin-bottom: 20px;
+  display: flex;
+}
+.modal-text-content {
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  max-height: 380px;
+  background: var(--bg-screen);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 6px;
+  padding: 15px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-main);
+  resize: vertical;
+  outline: none;
+}
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
 }
 
 @media (max-width: 900px) {

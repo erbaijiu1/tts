@@ -19,5 +19,9 @@ services:
         condition: service_healthy
     volumes:
       - ../server_data/tts_data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 300M
     networks:
       - web
