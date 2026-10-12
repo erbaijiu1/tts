@@ -9,6 +9,7 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from pydantic import BaseModel
+from urllib.parse import urlsplit
 
 from database import engine, Base, get_db
 from models import AudioTask
@@ -90,6 +91,16 @@ def get_user_id(request: Request) -> int:
     )
     return int(uid_str) if str(uid_str).isdigit() else 0
 
+def get_public_audio_url(stored_url: str) -> str:
+    """Return a host-independent URL for both new and legacy task records."""
+    if not stored_url:
+        return stored_url
+
+    filename = os.path.basename(urlsplit(stored_url).path)
+    if not filename:
+        return stored_url
+    return f"/{PROJECT_NAME}/static/{filename}"
+
 @router.get("/progress/{req_id}")
 async def get_progress(req_id: str):
     return {"progress": progress_store.get(req_id, 0)}
@@ -164,7 +175,6 @@ def upload_pdf(
 @router.post("/synthesize")
 async def synthesize_text(
     payload: SynthesizeRequest,
-    request: Request,
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_user_id)
 ):
@@ -198,10 +208,9 @@ async def synthesize_text(
             progress_callback=update_progress
         )
         
-        # Resolve request host for absolute URL
-        host = request.headers.get("host", "localhost")
-        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-        audio_url = f"{scheme}://{host}/{PROJECT_NAME}/static/{mp3_filename}"
+        # Keep media URLs relative so saved history remains playable after a
+        # hostname, port, reverse-proxy, or HTTP/HTTPS change.
+        audio_url = f"/{PROJECT_NAME}/static/{mp3_filename}"
         
         # Log task into database
         new_task = AudioTask(
@@ -252,7 +261,7 @@ async def get_tasks_history(
                 "filename": task.filename,
                 "text_snippet": task.text_snippet,
                 "full_text": task.full_text or task.text_snippet,
-                "audio_url": task.audio_url,
+                "audio_url": get_public_audio_url(task.audio_url),
                 "voice": task.voice,
                 "rate": task.rate,
                 "created_at": task.created_at
@@ -298,7 +307,7 @@ async def update_task(
             "filename": task.filename,
             "text_snippet": task.text_snippet,
             "full_text": task.full_text,
-            "audio_url": task.audio_url,
+            "audio_url": get_public_audio_url(task.audio_url),
             "voice": task.voice,
             "rate": task.rate,
             "created_at": task.created_at

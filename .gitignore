@@ -15,6 +15,10 @@ node_modules/
 dist/
 dist-*/
 
+# Commit the production web bundle so deployment does not require Node.js.
+!frontend/dist/
+!frontend/dist/**
+
 # Log files
 *.log
 

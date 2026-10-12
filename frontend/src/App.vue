@@ -259,6 +259,8 @@
             is="audio"
             ref="audioPlayer" 
             :src="audioUrl"
+            @play="isPlaying = true"
+            @pause="isPlaying = false"
             @timeupdate="updateAudioProgress"
             @loadedmetadata="onAudioLoaded"
             @ended="onAudioEnded"
@@ -381,7 +383,7 @@
               v-for="task in tasks" 
               :key="task.id" 
               class="history-item"
-              :class="{ active: audioUrl === task.audio_url }"
+              :class="{ active: currentTaskId === task.id }"
               @click="loadTrack(task)"
             >
               <div class="item-play-icon" title="播放此音频">
@@ -535,6 +537,7 @@ export default {
       
       // Audio player variables
       audioUrl: '',
+      currentTaskId: null,
       nowPlayingTitle: '',
       nowPlayingVoice: '',
       nowPlayingRate: '',
@@ -845,6 +848,7 @@ export default {
         
         // Auto-play the synthesized track
         this.loadTrack({
+          id: data.task_id,
           filename: data.filename,
           audio_url: data.audio_url,
           voice: this.voice,
@@ -889,11 +893,24 @@ export default {
         this.historyLoading = false;
       }
     },
+    normalizeAudioUrl(url) {
+      if (!url) return '';
+
+      try {
+        const parsed = new URL(url, window.location.origin);
+        // Generated files are served by this app. Using the current origin
+        // also repairs legacy history rows containing an old host or scheme.
+        return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+      } catch (error) {
+        return url;
+      }
+    },
     loadTrack(task) {
       if (this.audioUrl && this.isPlaying) {
         this.saveProgress();
       }
-      this.audioUrl = task.audio_url;
+      this.currentTaskId = task.id ?? null;
+      this.audioUrl = this.normalizeAudioUrl(task.audio_url);
       this.nowPlayingTitle = task.filename;
       this.nowPlayingVoice = task.voice;
       this.nowPlayingRate = task.rate;
@@ -902,12 +919,16 @@ export default {
       this.setupMediaSession(task.filename);
       
       // Load and autoplay
-      this.$nextTick(() => {
+      this.$nextTick(async () => {
         const player = this.$refs.audioPlayer;
         if (player) {
           player.load();
-          player.play();
-          this.isPlaying = true;
+          try {
+            await player.play();
+          } catch (error) {
+            this.isPlaying = false;
+            console.error('Audio playback failed:', error);
+          }
         }
       });
     },
@@ -952,7 +973,7 @@ export default {
         task.filename = updated.filename;
         
         // Sync player title & media session if currently playing
-        if (this.audioUrl === task.audio_url) {
+        if (this.currentTaskId === task.id) {
           this.nowPlayingTitle = updated.filename;
           this.setupMediaSession(updated.filename);
         }
@@ -1024,12 +1045,13 @@ export default {
         this.tasks = this.tasks.filter(t => t.id !== task.id);
 
         // Stop playing if the deleted task is currently playing
-        if (this.audioUrl === task.audio_url) {
+        if (this.currentTaskId === task.id) {
           const player = this.$refs.audioPlayer;
           if (player) {
             player.pause();
           }
           this.audioUrl = '';
+          this.currentTaskId = null;
           this.nowPlayingTitle = '';
           this.nowPlayingVoice = '';
           this.nowPlayingRate = '';
@@ -1044,7 +1066,7 @@ export default {
     },
 
     // Hidden Audio Player controls
-    togglePlay() {
+    async togglePlay() {
       const player = this.$refs.audioPlayer;
       if (!player || !this.audioUrl) return;
       
@@ -1066,8 +1088,12 @@ export default {
           this.lastPausedTime = null;
         }
 
-        player.play();
-        this.isPlaying = true;
+        try {
+          await player.play();
+        } catch (error) {
+          this.isPlaying = false;
+          console.error('Audio playback failed:', error);
+        }
       }
     },
     setPlayRate(rate) {
