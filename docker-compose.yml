@@ -18,6 +18,7 @@ services:
       mysql_db:
         condition: service_healthy
     volumes:
+      - ./backend:/app
       - ../server_data/tts_data:/app/data
     deploy:
       resources:
